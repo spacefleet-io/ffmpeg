@@ -2693,7 +2693,7 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
     int i, j;
     int stream_subdemuxer_index;
     int64_t first_timestamp, seek_timestamp, duration;
-    int64_t seq_no, seg_start_ts;
+    int64_t seq_no, seg_start_ts, target_timestamp;
 
     if ((flags & AVSEEK_FLAG_BYTE) || (c->ctx->ctx_flags & AVFMTCTX_UNSEEKABLE))
         return AVERROR(ENOSYS);
@@ -2726,6 +2726,8 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
      * specified stream index */
     if (!seek_pls || !find_timestamp_in_playlist(c, seek_pls, seek_timestamp, &seq_no, &seg_start_ts))
         return AVERROR(EIO);
+
+    target_timestamp = seek_timestamp;
 
     if (s->streams[stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
         flags & AVSEEK_FLAG_BACKWARD && !(flags & AVSEEK_FLAG_ANY)) {
@@ -2765,8 +2767,16 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
         pls->seek_flags = flags;
 
         if (pls != seek_pls) {
+            /* Only the playlist of the seeked stream has to start at its
+             * segment start to reach a keyframe. Seek the others (separate
+             * audio renditions) to the requested time instead, so the caller
+             * does not decode and drop everything between that keyframe and
+             * the target. Subtitle playlists keep the segment start, so a cue
+             * already showing at the target is not lost. */
+            if (!pls->is_subtitle)
+                pls->seek_timestamp = target_timestamp;
             /* set closest segment seq_no for playlists not handled above */
-            find_timestamp_in_playlist(c, pls, seek_timestamp, &pls->cur_seq_no, NULL);
+            find_timestamp_in_playlist(c, pls, pls->seek_timestamp, &pls->cur_seq_no, NULL);
             /* seek the playlist to the given position without taking
              * keyframes into account since this playlist does not have the
              * specified stream where we should look for the keyframes */
